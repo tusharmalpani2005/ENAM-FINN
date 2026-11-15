@@ -6,6 +6,32 @@ import re
 from . import store, seed, network, llm
 
 
+OUT_OF_SCOPE = re.compile(
+    r"\b(code|coding|program|programming|c\+\+|python|javascript|java|html|css|"
+    r"algorithm|linked list|recipe|homework|essay|translate|weather|game|movie|"
+    r"music|general knowledge)\b",
+    re.I,
+)
+
+
+def _in_scope(question):
+    if OUT_OF_SCOPE.search(question):
+        return False
+    terms = (
+        "portfolio", "holding", "stock", "share", "market", "price", "earnings",
+        "revenue", "profit", "pat", "fundamental", "filing", "announcement",
+        "quarter", "dividend", "valuation", "risk", "contact", "call", "network",
+        "investor", "management", "company", "sector", "theme", "recommend",
+        "research", "guidance", "performance",
+    )
+    haystack = question.casefold()
+    known = [c["name"] + " " + " ".join(c["aliases"]) for c in store.companies()]
+    known += [p["name"] for p in store.people() + store.ext_people()]
+    return any(term in haystack for term in terms) or any(
+        name.casefold() in haystack for name in known
+    )
+
+
 def _context():
     companies = []
     for c in store.companies():
@@ -61,6 +87,16 @@ def _context():
 
 
 def ask(q):
+    if not _in_scope(q):
+        return {
+            "intent": "out_of_scope",
+            "title": "FINN",
+            "card": "text",
+            "data": {
+                "text": "I can only help with your portfolio, holdings, market data, company research, filings, and FINN network contacts."
+            },
+            "via": "rules",
+        }
     if not llm.enabled():
         raise RuntimeError("Ask mode requires a configured LLM provider.")
     prompt = (
@@ -79,6 +115,9 @@ def ask(q):
         "Treat the supplied snapshot as the app's available data; do not claim you lack real-time access when a relevant "
         "price, fundamentals, filing, or contact value is present below. "
         "If the context truly lacks the requested fact, say what is missing. Plain text, no JSON, no canned help.\n\n"
+        "STRICT SCOPE: Only answer questions about the investor's portfolio, holdings, market data, "
+        "company research, filings, fundamentals, or FINN network contacts. For anything else, reply exactly: "
+        "'I can only help with your portfolio, holdings, market data, company research, filings, and FINN network contacts.'\n\n"
         f"FINN context:\n{json.dumps(_context(), ensure_ascii=False)}\n\n"
         f"Investor question: {q}"
     )
