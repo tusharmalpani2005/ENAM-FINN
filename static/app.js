@@ -4,7 +4,7 @@ const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "
 const api = (u, o) => fetch(u, o).then(async r => { if (!r.ok) { let m = r.status; try { m = (await r.json()).detail || m } catch { } throw new Error(m); } return r.json(); });
 const ls = { get: (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d } catch { return d } }, set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)) } catch { } } };
 
-const S = { note: "", manual: false, tab: "today", meta: null, hours: ls.get("hours", 24), volx: ls.get("volx", 2), px: ls.get("px", 4), cats: ls.get("cats", []), thread: [], netTicker: null, theme: null, mode: ls.get("mode", "dark") };
+const S = { note: "", manual: false, tab: "today", meta: null, hours: ls.get("hours", 24), volx: ls.get("volx", 2), px: ls.get("px", 4), cats: ls.get("cats", []), thread: [], netTicker: null, theme: null, mode: ls.get("mode", "light") };
 const ini = n => n.split(/\s+/).map(w => w[0]).slice(0, 2).join("");
 const pct = (v, d = 1) => v == null ? "–" : `<span class="${v >= 0 ? "up" : "dn"}">${v >= 0 ? "+" : ""}${v.toFixed(d)}%</span>`;
 const ago = iso => { const h = (Date.now() - new Date(iso)) / 36e5; return h < 1 ? "now" : h < 24 ? Math.round(h) + "h" : Math.round(h / 24) + "d"; };
@@ -28,7 +28,7 @@ $("#scrim").onclick = closeSheet;
 /* ---------- shared blocks ---------- */
 function contactRow(c, extra = "") {
   const p = c.contact || c;
-  return `<div class="link" data-act="person" data-id="${p.id}"><div class="av">${esc(ini(p.name))}</div><div><b>${esc(p.name)}</b> <span class="sub">${esc(p.role)}, ${esc(p.org)}</span>${extra ? `<div class="sub" style="color:#cfcbc0">${extra}</div>` : ""}</div></div>`;
+  return `<div class="link" data-act="person" data-id="${p.id}"><div class="av">${esc(ini(p.name))}</div><div><b>${esc(p.name)}</b> <span class="sub">${esc(p.role)}, ${esc(p.org)}</span>${extra ? `<div class="sub" style="color:var(--mu)">${extra}</div>` : ""}</div></div>`;
 }
 function networkBlock(n) {
   if (!n) return "";
@@ -205,7 +205,7 @@ async function drawGraph() {
   $("#graph").innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="100%">${[60, 105, 130].map(r => `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--line)" stroke-dasharray="2 4"/>`).join("")}
     ${pts.map(o => `<line x1="${cx}" y1="${cy}" x2="${o.x}" y2="${o.y}" stroke="var(--ac)" stroke-opacity="${.15 + o.p.strength * .1}" stroke-width="${o.p.strength / 2}"/>`).join("")}
     <circle cx="${cx}" cy="${cy}" r="34" fill="var(--ac)"/><text x="${cx}" y="${cy + 4}" text-anchor="middle" font-size="9" font-weight="700" fill="#15120a">${S.netTicker.slice(0, 9)}</text>
-    ${pts.map(o => `<g data-act="person" data-id="${o.p.id}" style="cursor:pointer"><circle cx="${o.x}" cy="${o.y}" r="${10 + o.p.strength * 1.6}" fill="#2b3140" stroke="var(--ac)" stroke-width="1"/><text x="${o.x}" y="${o.y + 4}" text-anchor="middle" font-size="10" font-weight="700" fill="var(--tx)">${esc(ini(o.p.name))}</text><text x="${o.x}" y="${o.y + 26}" text-anchor="middle" font-size="9" fill="var(--mu)">${esc(o.p.name.split(" ")[0])}</text></g>`).join("")}</svg>
+    ${pts.map(o => `<g data-act="person" data-id="${o.p.id}" style="cursor:pointer"><circle cx="${o.x}" cy="${o.y}" r="${10 + o.p.strength * 1.6}" fill="var(--p2)" stroke="var(--ac)" stroke-width="1"/><text x="${o.x}" y="${o.y + 4}" text-anchor="middle" font-size="10" font-weight="700" fill="var(--tx)">${esc(ini(o.p.name))}</text><text x="${o.x}" y="${o.y + 26}" text-anchor="middle" font-size="9" fill="var(--mu)">${esc(o.p.name.split(" ")[0])}</text></g>`).join("")}</svg>
     <div class="sub">Closer to centre = better placed to help. Thicker line = stronger relationship.</div>${g.nodes.slice(0, 4).map(p => contactRow(p, esc(p.why))).join("")}`;
 }
 async function drawExp() { const r = await api("/api/network/expertise?theme=" + encodeURIComponent(S.theme)); $("#exp").innerHTML = r.map(p => contactRow(p, esc(p.why))).join("") || `<div class="sub">No one yet.</div>`; }
@@ -247,7 +247,7 @@ $("#mode").onclick = () => { S.mode = S.mode === "dark" ? "light" : "dark"; ls.s
 $("#gear").onclick = settings;
 applyMode();
 (async () => {
-  S.meta = await api("/api/meta"); $("#demo").textContent = "Synthetic: " + S.meta.synthetic_layers.join(", ") + (S.meta.live_fundamentals.length ? "" : ", research"); $("#demo").hidden = false;
+  S.meta = await api("/api/meta");
   render();
   if ("serviceWorker" in navigator) { /* intentionally no SW: always fresh data */ }
 })();
