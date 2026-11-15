@@ -92,10 +92,16 @@ function onPopState(e) {
 
   const st = e.state || {};
 
-  // 2. Back button navigates to previous tab if tab changed
+  // 2. Back button navigates to previous tab if tab changed, restoring previous landing/card position
   if (st.tab && st.tab !== S.tab) {
+    pendingLanding = st;
     setTab(st.tab, false);
+    applyPendingLanding();
     return;
+  }
+  if (st.cardId || typeof st.scrollY === "number") {
+    pendingLanding = st;
+    applyPendingLanding();
   }
 
   // 3. Back button at root tab prompts before closing tab
@@ -153,28 +159,69 @@ function filingCard(i) {
 const store = { ready: t => S.meta && S.meta.research_ready.includes(t) };
 
 /* ---------- TODAY ---------- */
-async function today() {
+let todayCache = null;
+let pendingLanding = null;
+
+function applyPendingLanding() {
+  if (!pendingLanding) return;
+  const target = pendingLanding;
+  pendingLanding = null;
+  requestAnimationFrame(() => {
+    let scrolled = false;
+    if (target.cardId) {
+      const escapedId = typeof CSS !== "undefined" && CSS.escape ? CSS.escape(target.cardId) : target.cardId.replace(/"/g, '\\"');
+      const card = document.querySelector(`.card[data-id="${escapedId}"]`);
+      if (card) {
+        card.scrollIntoView({ behavior: "smooth", block: "center" });
+        card.classList.add("highlight");
+        setTimeout(() => card.classList.remove("highlight"), 2400);
+        scrolled = true;
+      }
+    }
+    if (!scrolled && typeof target.scrollY === "number" && target.scrollY > 0) {
+      $("main").scrollTop = target.scrollY;
+    }
+  });
+}
+
+function renderToday(d, al) {
+  const v = $("#view");
+  const c = d.counts, must = d.items.filter(i => i.tier === "must"), look = d.items.filter(i => i.tier === "look"), rt = d.items.filter(i => i.tier === "routine");
+  v.innerHTML = `
+    <div class="row wrap" style="margin:6px 0">${[[24, "24h"], [72, "3 days"], [168, "7 days"], [720, "30 days"]].map(([h, l]) => `<button class="chip ${S.hours == h ? "on" : ""}" data-act="hours" data-h="${h}">${l}</button>`).join("")}</div>
+    ${S.note ? `<div class="sub" style="margin:2px 0 6px">${esc(S.note)}</div>` : ""}
+    <div id="tbody">
+      <div class="summary"><b>${c.must}</b> need you, <b>${c.look}</b> worth a look, ${c.routine} routine filings tucked away.</div>
+      ${d.items.length ? "" : `<div class="sub">Nothing was filed in this window. Try a longer one.</div>`}
+      ${al.length ? `<h2>Unusual moves <span class="sub" style="text-transform:none;letter-spacing:0">(vol ≥ ${S.volx}× or ±${S.px}%)</span></h2><div class="strip">${al.map(a => `<div class="alert"><div class="row"><span class="t">${a.ticker}</span><span class="sp"></span>${pct(a.change)}</div>${spark(a.spark, 150, 30, a.change >= 0 ? "var(--up)" : "var(--dn)")}<div class="n">${esc(a.reasons.join(" · "))}</div></div>`).join("")}</div>` : `<h2>Unusual moves</h2><div class="sub">Nothing crossed your thresholds.</div>`}
+      ${must.length ? `<h2>Needs you</h2>${must.map(filingCard).join("")}` : ""}
+      ${look.length ? `<h2>Worth a look</h2>${look.map(filingCard).join("")}` : ""}
+      ${d.reconnect.length ? `<h2>Keep the network warm</h2>${d.reconnect.map(r => `<div class="reconnect"><div>${esc(r.nudge)}</div><div class="sub" style="margin:4px 0 8px">${esc(r.event)}</div><div class="row"><button class="btn" data-act="person" data-id="${r.contact.id}">Open profile</button></div></div>`).join("")}` : ""}
+      ${rt.length ? `<details><summary>${rt.length} routine filings (collapsed)</summary>${rt.map(i => `<div class="routine"><b>${i.ticker}</b> <span class="cat">${esc(i.label)}</span> ${esc(i.subject)} <span class="sub">${ago(i.ts)}</span></div>`).join("")}</details>` : ""}
+    </div>`;
+  applyPendingLanding();
+}
+
+async function today(force = false) {
   $("main").classList.remove("ask-mode");
+  const cacheKey = `${S.hours}_${S.cats.join(",")}_${S.volx}_${S.px}`;
+  if (!force && todayCache && todayCache.key === cacheKey) {
+    renderToday(todayCache.d, todayCache.al);
+    return;
+  }
   const v = $("#view");
   v.innerHTML = `<div class="row wrap" style="margin:6px 0">${[[24, "24h"], [72, "3 days"], [168, "7 days"], [720, "30 days"]].map(([h, l]) => `<button class="chip ${S.hours == h ? "on" : ""}" data-act="hours" data-h="${h}">${l}</button>`).join("")}</div>${S.note ? `<div class="sub" style="margin:2px 0 6px">${esc(S.note)}</div>` : ""}<div id="tbody" class="sub">Loading…</div>`;
   const [d, al] = await Promise.all([
     api(`/api/digest?hours=${S.hours}${S.cats.length ? "&cats=" + S.cats.join(",") : ""}`),
-    api(`/api/alerts?vol_x=${S.volx}&px=${S.px}`)]);
+    api(`/api/alerts?vol_x=${S.volx}&px=${S.px}`)
+  ]);
   if (!d.items.length && S.hours < 720 && !S.manual) {   // quiet window (weekend / holiday / old snapshot): widen 24h -> 7d -> 30d instead of a blank page
     const next = S.hours < 168 ? 168 : 720, lbl = h => h === 24 ? "24 hours" : h === 72 ? "3 days" : "7 days";
     S.note = `Nothing was filed in the last ${lbl(S.hours)}, so this shows the last ${next === 168 ? "7 days" : "30 days"}.`;
-    S.hours = next; return today();
+    S.hours = next; return today(true);
   }
-  const c = d.counts, must = d.items.filter(i => i.tier === "must"), look = d.items.filter(i => i.tier === "look"), rt = d.items.filter(i => i.tier === "routine");
-  $("#tbody").className = "";
-  $("#tbody").innerHTML = `
-    <div class="summary"><b>${c.must}</b> need you, <b>${c.look}</b> worth a look, ${c.routine} routine filings tucked away.</div>
-    ${d.items.length ? "" : `<div class="sub">Nothing was filed in this window. Try a longer one.</div>`}
-    ${al.length ? `<h2>Unusual moves <span class="sub" style="text-transform:none;letter-spacing:0">(vol ≥ ${S.volx}× or ±${S.px}%)</span></h2><div class="strip">${al.map(a => `<div class="alert"><div class="row"><span class="t">${a.ticker}</span><span class="sp"></span>${pct(a.change)}</div>${spark(a.spark, 150, 30, a.change >= 0 ? "var(--up)" : "var(--dn)")}<div class="n">${esc(a.reasons.join(" · "))}</div></div>`).join("")}</div>` : `<h2>Unusual moves</h2><div class="sub">Nothing crossed your thresholds.</div>`}
-    ${must.length ? `<h2>Needs you</h2>${must.map(filingCard).join("")}` : ""}
-    ${look.length ? `<h2>Worth a look</h2>${look.map(filingCard).join("")}` : ""}
-    ${d.reconnect.length ? `<h2>Keep the network warm</h2>${d.reconnect.map(r => `<div class="reconnect"><div>${esc(r.nudge)}</div><div class="sub" style="margin:4px 0 8px">${esc(r.event)}</div><div class="row"><button class="btn" data-act="person" data-id="${r.contact.id}">Open profile</button></div></div>`).join("")}` : ""}
-    ${rt.length ? `<details><summary>${rt.length} routine filings (collapsed)</summary>${rt.map(i => `<div class="routine"><b>${i.ticker}</b> <span class="cat">${esc(i.label)}</span> ${esc(i.subject)} <span class="sub">${ago(i.ts)}</span></div>`).join("")}</details>` : ""}`;
+  todayCache = { key: cacheKey, d, al };
+  renderToday(d, al);
 }
 
 /* ---------- research sheet ---------- */
@@ -224,9 +271,14 @@ function askView() {
   $("#go").onclick = send; $("#q").onkeydown = e => { if (e.key === "Enter") send(); };
   const m = $("#view"); m.scrollTop = m.scrollHeight;
 }
-async function doAsk(q) {
-  S.tab !== "ask" && setTab("ask");
-  S.thread.push({ html: `<div class="q">${esc(q)}</div>` });
+async function doAsk(q, source = null) {
+  if (S.tab !== "ask") {
+    setTab("ask", true, source ? { fromTab: source.tab, cardId: source.cardId, ticker: source.ticker, scrollY: source.scrollY } : null);
+  }
+  const backBtnHtml = source && (source.ticker || source.cardId)
+    ? `<div class="row" style="margin:4px 0 8px"><button class="btn back-nav" data-act="back-to-source">← Back to ${esc(source.ticker || "filing")}</button></div>`
+    : "";
+  S.thread.push({ html: `${backBtnHtml}<div class="q">${esc(q)}</div>` });
   const thinkingId = `thinking-${Date.now()}`;
   S.thread.push({ id: thinkingId, html: `<div class="thinking"><span>FINN is thinking</span><i></i><i></i><i></i></div>` });
   askView();
@@ -317,11 +369,11 @@ function settings() {
   <p class="sub" style="margin-top:16px">Settings live only on this device. The server is stateless.</p><button class="btn pri" id="done">Apply</button>`);
   $("#volx").oninput = e => { S.volx = +e.target.value; $("#vx").textContent = S.volx; };
   $("#px").oninput = e => { S.px = +e.target.value; $("#pxv").textContent = S.px; };
-  $("#done").onclick = () => { ls.set("volx", S.volx); ls.set("px", S.px); ls.set("cats", S.cats); closeSheet(); render(); };
+  $("#done").onclick = () => { ls.set("volx", S.volx); ls.set("px", S.px); ls.set("cats", S.cats); closeSheet(); todayCache = null; render(); };
 }
 
 /* ---------- wiring ---------- */
-function setTab(t, push = true) {
+function setTab(t, push = true, extraState = null) {
   if (S.tab === t && !push) return;
   if (!$("#sheet").hidden) {
     $("#sheet").hidden = true;
@@ -329,11 +381,15 @@ function setTab(t, push = true) {
     sheetStack = [];
   }
   const prevTab = S.tab;
+  const currentScrollY = $("main") ? $("main").scrollTop : 0;
+  if (history.state) {
+    history.replaceState({ ...history.state, tab: prevTab, scrollY: currentScrollY }, "", "#" + prevTab);
+  }
   S.tab = t;
   document.querySelectorAll("nav button").forEach(b => b.classList.toggle("on", b.dataset.tab === t));
   render();
   if (push && prevTab !== t) {
-    history.pushState({ tab: t }, "", "#" + t);
+    history.pushState({ tab: t, ...extraState }, "", "#" + t);
   }
 }
 function render() { ({ today, ask: askView, network: networkView })[S.tab](); }
@@ -342,10 +398,21 @@ document.addEventListener("click", e => {
   if (t.dataset.tab) return setTab(t.dataset.tab);
   const a = t.dataset.act;
   const inSheet = Boolean(t.closest("#sheet"));
-  if (a === "hours") { S.note = ""; S.manual = true; S.hours = +t.dataset.h; ls.set("hours", S.hours); today(); }
+  if (a === "hours") { S.note = ""; S.manual = true; S.hours = +t.dataset.h; ls.set("hours", S.hours); today(true); }
   else if (a === "research" || a === "open-research") research(t.dataset.t, null, inSheet);
   else if (a === "person") personSheet(t.dataset.id, inSheet);
-  else if (a === "ask") { closeSheet(true); doAsk(t.dataset.q); }
+  else if (a === "ask") {
+    const card = t.closest(".card");
+    const cardId = card ? card.dataset.id : null;
+    const ticker = card ? (card.querySelector(".tk")?.textContent || "").trim() : "";
+    const scrollY = $("main") ? $("main").scrollTop : 0;
+    const source = cardId ? { tab: S.tab, cardId, ticker, scrollY } : null;
+    closeSheet(true);
+    doAsk(t.dataset.q, source);
+  }
+  else if (a === "back-to-source") {
+    history.back();
+  }
   else if (a === "tab") setTab(t.dataset.t);
   else if (a === "theme") { S.theme = t.dataset.t; networkView(); }
   else if (a === "cat") { const c = t.dataset.c; S.cats = S.cats.includes(c) ? S.cats.filter(x => x !== c) : [...S.cats, c]; t.classList.toggle("on"); }
