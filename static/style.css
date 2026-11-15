@@ -61,7 +61,14 @@ summary{cursor:pointer;color:var(--mu);font-size:13px}
 #scrim{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:5}
 #sheet{position:fixed;left:0;right:0;bottom:0;max-width:480px;margin:0 auto;max-height:92dvh;overflow-y:auto;background:var(--bg);border:1px solid var(--line);border-radius:20px 20px 0 0;padding:8px 16px 30px;z-index:6;animation:up .22s ease-out}
 @keyframes up{from{transform:translateY(40px);opacity:.4}}
-.grab{width:40px;height:4px;border-radius:2px;background:var(--line);margin:4px auto 12px}
+.sheet-bar{display:flex;align-items:center;justify-content:center;position:relative;margin:2px 0 10px;min-height:22px}
+.grab{width:40px;height:4px;border-radius:2px;background:var(--line);margin:0 auto;cursor:pointer}
+.sheet-close{position:absolute;right:-4px;top:-3px;background:none;border:0;color:var(--mu);padding:4px;cursor:pointer;border-radius:50%;display:grid;place-items:center}
+.sheet-close:hover{color:var(--tx)}
+.sheet-close .icon{width:18px;height:18px}
+#toast{position:fixed;bottom:calc(var(--nav-space) + 16px);left:50%;transform:translateX(-50%) translateY(20px);background:rgba(27,31,39,.96);color:var(--tx);padding:8px 18px;border-radius:99px;font:600 13px system-ui;border:1px solid var(--line);box-shadow:0 4px 14px rgba(0,0,0,.35);z-index:100;opacity:0;pointer-events:none;transition:transform .22s ease,opacity .22s ease}
+#toast.show{transform:translateX(-50%) translateY(0);opacity:1}
+:root[data-theme="light"] #toast{background:rgba(255,254,250,.96);color:var(--tx);border-color:var(--line);box-shadow:0 4px 14px rgba(0,0,0,.12)}
 /* ask */
 .thread .q{align-self:flex-end;background:var(--p2);border-radius:14px 14px 4px 14px;padding:8px 12px;margin:12px 0 6px 40px;width:fit-content;margin-left:auto}
 .thinking{display:flex;align-items:center;gap:4px;color:var(--mu);font-size:13px;margin:10px 0;padding:8px 12px}

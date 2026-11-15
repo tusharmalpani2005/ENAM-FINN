@@ -20,10 +20,104 @@ function bars(vals, labels, w = 300, h = 70, fmt = num) {
   return `<svg width="100%" viewBox="0 0 ${w} ${h + 16}">${vals.map((v, i) => { const bh = Math.abs(v) / mx * h; return `<rect x="${i * bw + 6}" y="${h - bh}" width="${bw - 12}" height="${bh}" rx="3" fill="${v < 0 ? "var(--dn)" : "var(--ac)"}" opacity=".85"/><text x="${i * bw + bw / 2}" y="${h + 12}" font-size="10" text-anchor="middle" fill="var(--mu)">${labels[i]}</text><text x="${i * bw + bw / 2}" y="${h - bh - 3}" font-size="9" text-anchor="middle" fill="var(--tx)">${fmt(v)}</text>` }).join("")}</svg>`;
 }
 
-/* ---------- sheet ---------- */
-function openSheet(html) { $("#sheetbody").innerHTML = html; $("#sheet").hidden = false; $("#scrim").hidden = false; $("#sheet").scrollTop = 0; }
-function closeSheet() { $("#sheet").hidden = true; $("#scrim").hidden = true; }
-$("#scrim").onclick = closeSheet;
+/* ---------- sheet & history navigation ---------- */
+let sheetStack = [];
+let isProgrammaticClose = false;
+let lastBackPressTime = 0;
+
+function openSheet(html, opts = {}) {
+  const isSub = opts.sub === true;
+  const wasHidden = $("#sheet").hidden;
+  $("#sheetbody").innerHTML = html;
+  $("#sheet").hidden = false;
+  $("#scrim").hidden = false;
+  $("#sheet").scrollTop = 0;
+
+  if (wasHidden) {
+    sheetStack = [html];
+    history.pushState({ tab: S.tab, sheetDepth: 1 }, "", "#" + S.tab + "-sheet");
+  } else if (isSub) {
+    sheetStack.push(html);
+    history.pushState({ tab: S.tab, sheetDepth: sheetStack.length }, "", "#" + S.tab + "-sheet-" + sheetStack.length);
+  } else {
+    if (sheetStack.length > 0) {
+      sheetStack[sheetStack.length - 1] = html;
+    } else {
+      sheetStack = [html];
+    }
+  }
+}
+
+function closeSheet(immediate = false) {
+  if ($("#sheet").hidden) return;
+  const depth = sheetStack.length;
+  sheetStack = [];
+  $("#sheet").hidden = true;
+  $("#scrim").hidden = true;
+
+  if (!immediate && depth > 0) {
+    isProgrammaticClose = true;
+    history.go(-depth);
+  }
+}
+
+let toastTimer = null;
+function showToast(msg) {
+  const t = $("#toast");
+  if (!t) return;
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove("show"), 2200);
+}
+
+function onPopState(e) {
+  if (isProgrammaticClose) {
+    isProgrammaticClose = false;
+    return;
+  }
+
+  // 1. Back button closes active bottom sheet or steps back in sheet stack
+  if (sheetStack.length > 0) {
+    sheetStack.pop();
+    if (sheetStack.length > 0) {
+      $("#sheetbody").innerHTML = sheetStack[sheetStack.length - 1];
+      $("#sheet").scrollTop = 0;
+    } else {
+      $("#sheet").hidden = true;
+      $("#scrim").hidden = true;
+    }
+    return;
+  }
+
+  const st = e.state || {};
+
+  // 2. Back button navigates to previous tab if tab changed
+  if (st.tab && st.tab !== S.tab) {
+    setTab(st.tab, false);
+    return;
+  }
+
+  // 3. Back button at root tab prompts before closing tab
+  if (st.root) {
+    const now = Date.now();
+    if (now - lastBackPressTime < 2500) {
+      history.back();
+    } else {
+      lastBackPressTime = now;
+      showToast("Press back again to exit");
+      history.pushState({ tab: S.tab }, "", "#" + S.tab);
+    }
+  }
+}
+
+window.addEventListener("popstate", onPopState);
+
+$("#scrim").onclick = () => closeSheet();
+const sheetCloseBtn = $("#sheet-close");
+if (sheetCloseBtn) sheetCloseBtn.onclick = () => closeSheet();
+const grabBar = $(".grab");
+if (grabBar) grabBar.onclick = () => closeSheet();
 
 /* ---------- shared blocks ---------- */
 function contactRow(c, extra = "") {
@@ -84,9 +178,9 @@ async function today() {
 }
 
 /* ---------- research sheet ---------- */
-async function research(t, pre) {
-  openSheet(`<div class="sub">Reading primary sources for ${t}…</div>`);
-  let r; try { r = pre || await api("/api/research/" + t); } catch (e) { return openSheet(`<h3>${t}</h3><p class="sub">${esc(e.message)}</p>`); }
+async function research(t, pre, isSub = false) {
+  openSheet(`<div class="sub">Reading primary sources for ${esc(t)}…</div>`, { sub: isSub });
+  let r; try { r = pre || await api("/api/research/" + encodeURIComponent(t)); } catch (e) { return openSheet(`<h3>${esc(t)}</h3><p class="sub">${esc(e.message)}</p>`); }
   openSheet(researchHTML(r));
 }
 function researchHTML(r) {
@@ -107,8 +201,10 @@ function researchHTML(r) {
 }
 
 /* ---------- person sheet ---------- */
-async function personSheet(id) {
-  const d = await api("/api/network/person/" + id), p = d.person;
+async function personSheet(id, isSub = false) {
+  openSheet(`<div class="sub">Loading profile…</div>`, { sub: isSub });
+  let d; try { d = await api("/api/network/person/" + encodeURIComponent(id)); } catch (e) { return openSheet(`<h3>Profile</h3><p class="sub">${esc(e.message)}</p>`); }
+  const p = d.person;
   openSheet(`<div class="row"><div class="av" style="width:44px;height:44px">${esc(ini(p.name))}</div><div><h3>${esc(p.name)}</h3><div class="sub">${esc(p.role)}, ${esc(p.org)}</div></div></div>
   ${p.met ? `<p class="sub">${esc(p.met)} · strength ${p.strength}/5 · last spoke ${p.last}d ago</p>` : ""}
   <h2>Career</h2>${p.history.slice().reverse().map(h => `<div style="margin:4px 0"><b>${esc(h.org)}</b> <span class="sub">${esc(h.role)} · ${h.start}–${h.end || "now"}</span></div>`).join("")}
@@ -225,16 +321,31 @@ function settings() {
 }
 
 /* ---------- wiring ---------- */
-function setTab(t) { S.tab = t; document.querySelectorAll("nav button").forEach(b => b.classList.toggle("on", b.dataset.tab === t)); render(); }
+function setTab(t, push = true) {
+  if (S.tab === t && !push) return;
+  if (!$("#sheet").hidden) {
+    $("#sheet").hidden = true;
+    $("#scrim").hidden = true;
+    sheetStack = [];
+  }
+  const prevTab = S.tab;
+  S.tab = t;
+  document.querySelectorAll("nav button").forEach(b => b.classList.toggle("on", b.dataset.tab === t));
+  render();
+  if (push && prevTab !== t) {
+    history.pushState({ tab: t }, "", "#" + t);
+  }
+}
 function render() { ({ today, ask: askView, network: networkView })[S.tab](); }
 document.addEventListener("click", e => {
   const t = e.target.closest("[data-tab],[data-act]"); if (!t) return;
   if (t.dataset.tab) return setTab(t.dataset.tab);
   const a = t.dataset.act;
+  const inSheet = Boolean(t.closest("#sheet"));
   if (a === "hours") { S.note = ""; S.manual = true; S.hours = +t.dataset.h; ls.set("hours", S.hours); today(); }
-  else if (a === "research" || a === "open-research") research(t.dataset.t);
-  else if (a === "person") personSheet(t.dataset.id);
-  else if (a === "ask") { closeSheet(); doAsk(t.dataset.q); }
+  else if (a === "research" || a === "open-research") research(t.dataset.t, null, inSheet);
+  else if (a === "person") personSheet(t.dataset.id, inSheet);
+  else if (a === "ask") { closeSheet(true); doAsk(t.dataset.q); }
   else if (a === "tab") setTab(t.dataset.t);
   else if (a === "theme") { S.theme = t.dataset.t; networkView(); }
   else if (a === "cat") { const c = t.dataset.c; S.cats = S.cats.includes(c) ? S.cats.filter(x => x !== c) : [...S.cats, c]; t.classList.toggle("on"); }
@@ -247,6 +358,13 @@ $("#mode").onclick = () => { S.mode = S.mode === "dark" ? "light" : "dark"; ls.s
 $("#gear").onclick = settings;
 applyMode();
 (async () => {
+  const hashTab = (location.hash.slice(1).split("-")[0] || "").toLowerCase();
+  if (["today", "ask", "network"].includes(hashTab)) {
+    S.tab = hashTab;
+  }
+  history.replaceState({ tab: S.tab, root: true }, "", "#" + S.tab);
+  history.pushState({ tab: S.tab }, "", "#" + S.tab);
+
   S.meta = await api("/api/meta");
   render();
   if ("serviceWorker" in navigator) { /* intentionally no SW: always fresh data */ }
