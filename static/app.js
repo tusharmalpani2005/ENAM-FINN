@@ -61,13 +61,14 @@ const store = { ready: t => S.meta && S.meta.research_ready.includes(t) };
 /* ---------- TODAY ---------- */
 async function today() {
   const v = $("#view");
-  v.innerHTML = `<div class="row wrap" style="margin:6px 0">${[[24, "24h"], [72, "3 days"], [168, "7 days"]].map(([h, l]) => `<button class="chip ${S.hours == h ? "on" : ""}" data-act="hours" data-h="${h}">${l}</button>`).join("")}</div>${S.note ? `<div class="sub" style="margin:2px 0 6px">${esc(S.note)}</div>` : ""}<div id="tbody" class="sub">Loading…</div>`;
+  v.innerHTML = `<div class="row wrap" style="margin:6px 0">${[[24, "24h"], [72, "3 days"], [168, "7 days"], [720, "30 days"]].map(([h, l]) => `<button class="chip ${S.hours == h ? "on" : ""}" data-act="hours" data-h="${h}">${l}</button>`).join("")}</div>${S.note ? `<div class="sub" style="margin:2px 0 6px">${esc(S.note)}</div>` : ""}<div id="tbody" class="sub">Loading…</div>`;
   const [d, al] = await Promise.all([
     api(`/api/digest?hours=${S.hours}${S.cats.length ? "&cats=" + S.cats.join(",") : ""}`),
     api(`/api/alerts?vol_x=${S.volx}&px=${S.px}`)]);
-  if (!d.items.length && S.hours < 168 && !S.manual) {   // quiet window (weekend / holiday): widen automatically instead of showing a blank page
-    S.note = `Nothing was filed in the last ${S.hours === 24 ? "24 hours" : "3 days"}, so this shows the last 7 days.`;
-    S.hours = 168; return today();
+  if (!d.items.length && S.hours < 720 && !S.manual) {   // quiet window (weekend / holiday / old snapshot): widen 24h -> 7d -> 30d instead of a blank page
+    const next = S.hours < 168 ? 168 : 720, lbl = h => h === 24 ? "24 hours" : h === 72 ? "3 days" : "7 days";
+    S.note = `Nothing was filed in the last ${lbl(S.hours)}, so this shows the last ${next === 168 ? "7 days" : "30 days"}.`;
+    S.hours = next; return today();
   }
   const c = d.counts, must = d.items.filter(i => i.tier === "must"), look = d.items.filter(i => i.tier === "look"), rt = d.items.filter(i => i.tier === "routine");
   $("#tbody").className = "";
