@@ -123,7 +123,7 @@ const SUGG = ["What changed today?", "Dig into Asian Paints", "Who should I call
 function askView() {
   $("main").classList.add("ask-mode");
   $("#view").innerHTML = `<div class="thread" id="thread">${S.thread.length ? S.thread.map(m => m.html).join("") : `<div class="summary" style="margin-top:24px">Ask FINN anything about your book, a company, or who you know.</div><div class="row wrap">${SUGG.map(q => `<button class="chip" data-act="ask" data-q="${esc(q)}">${esc(q)}</button>`).join("")}</div>`}</div>
-  <div class="askbar"><input id="q" placeholder="Ask FINN…" enterkeyhint="send" autocomplete="off"><button class="go" id="go" aria-label="Send">&#8593;</button></div>`;
+  <div class="askbar"><input id="q" placeholder="Ask FINN..." enterkeyhint="send" autocomplete="off"><button class="go" id="go" aria-label="Send"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 14-7-3 14-4-5-7-2Z"/><path d="m12 14 7-9"/></svg></button></div>`;
   const send = () => { const i = $("#q"); if (i.value.trim()) doAsk(i.value.trim()); };
   $("#go").onclick = send; $("#q").onkeydown = e => { if (e.key === "Enter") send(); };
   const m = $("#view"); m.scrollTop = m.scrollHeight;
