@@ -86,7 +86,7 @@ async function today() {
 /* ---------- research sheet ---------- */
 async function research(t, pre) {
   openSheet(`<div class="sub">Reading primary sources for ${t}…</div>`);
-  let r; try { r = pre || await api("/api/research/" + t); } catch (e) { return openSheet(`<h3>${t}</h3><p class="sub">${esc(e.message)}</p><p class="sub">Fetch real data with <code>python3 -m app.fetchers.screener ${t}</code> (it prints a data-quality report).</p>`); }
+  let r; try { r = pre || await api("/api/research/" + t); } catch (e) { return openSheet(`<h3>${t}</h3><p class="sub">${esc(e.message)}</p>`); }
   openSheet(researchHTML(r));
 }
 function researchHTML(r) {

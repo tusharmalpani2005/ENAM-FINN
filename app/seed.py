@@ -1,6 +1,6 @@
 """Synthetic demo data. EVERYTHING here is invented: people are fictional, and company
 figures / filings / transcripts are illustrative, NOT the real companies' disclosures.
-Real adapters (app/fetchers/*) write the same schemas into data/live/ and override this."""
+Live snapshots in data/live/ override this fallback data."""
 import datetime as dt
 import random
 import zlib

@@ -1,5 +1,4 @@
-"""Data access. Seed data is the default; JSON files in data/live/ (written by the fetchers)
-override it per dataset, so the same app runs on synthetic or live data."""
+"""Data access. Live snapshots override the bundled fallback data per dataset."""
 import json
 import os
 import datetime as dt
@@ -73,17 +72,7 @@ def ext_people():
 
 def fundamentals(ticker):
     t = ticker.upper()
-    live = _live(f"fundamentals_{t}.json")   # live file (from the screener fetcher) beats the synthetic seed
+    live = _live(f"fundamentals_{t}.json")
     if live:
         return live
-    if t in seed.FUNDAMENTALS:
-        return seed.FUNDAMENTALS[t]
-    try:  # best-effort live fetch (needs network); cached to data/live
-        from .fetchers import screener
-        f = screener.fetch(t)
-        os.makedirs(LIVE, exist_ok=True)
-        with open(os.path.join(LIVE, f"fundamentals_{t}.json"), "w") as fh:
-            json.dump(f, fh)
-        return f
-    except Exception:
-        return None
+    return seed.FUNDAMENTALS.get(t)

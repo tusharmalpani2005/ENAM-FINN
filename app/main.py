@@ -42,7 +42,7 @@ def research(ticker: str):
     except ValueError as e:
         raise HTTPException(422, str(e))
     if not r:
-        raise HTTPException(404, f"No fundamentals for {ticker}. Run: python -m app.fetchers.screener {ticker}")
+        raise HTTPException(404, f"No fundamentals for {ticker}.")
     return r
 
 
