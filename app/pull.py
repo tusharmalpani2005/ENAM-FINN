@@ -243,4 +243,4 @@ def _verdict(r):
     base = (f"{r['name']} grew revenue {s['latest_q']['revenue_yoy']}% YoY last quarter with {r['trajectory']['revenue_cagr']}% five-year CAGR; " + track)
     prompt = ("Using ONLY these computed facts (no outside knowledge), write exactly 2 plain sentences (no markdown, no bullet points) on whether the numbers back the narrative. FACTS: "
               + str(dict(snapshot=s, scorecard=sc, bull=r["bull"], bear=r["bear"], guidance=[(g["said_in"], g["metric"], g["low"], g["high"], g.get("delivered"), g["status"]) for g in r["narrative_vs_numbers"]])))
-    return llm.complete(prompt, tier="strong") or base
+    return llm.complete(prompt, tier="strong", purpose="verdict") or base

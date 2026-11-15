@@ -9,10 +9,12 @@ import json
 import os
 import re
 import threading
+import time
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 CACHE = os.path.join(ROOT, "data", "cache")
 ANTHROPIC_MODELS = {"cheap": "claude-haiku-5-5", "strong": "claude-sonnet-5-5"}
+PATIENT = False   # batch jobs (app/warm.py) set this: on a 429 wait out Retry-After and retry. Live requests fail fast instead.
 STATS = dict(calls=0, cache_hits=0, errors=0, last_error=None, by_purpose={})
 _lock = threading.Lock()
 
@@ -57,6 +59,11 @@ def _bump(purpose, key):
         STATS["by_purpose"].setdefault(purpose, dict(calls=0, cache_hits=0, errors=0))[{"calls": "calls", "cache_hits": "cache_hits", "errors": "errors"}[key]] += 1
 
 
+class RateLimited(Exception):
+    def __init__(self, after):
+        self.after = after
+
+
 def _groq(prompt, max_tokens):
     import httpx
     r = httpx.post("https://api.groq.com/openai/v1/chat/completions", timeout=40,
@@ -66,6 +73,12 @@ def _groq(prompt, max_tokens):
                          "reasoning_effort": "low",                     # gpt-oss is a reasoning model; keep it cheap and fast
                          "max_completion_tokens": max_tokens + 500,     # headroom: reasoning tokens count against the cap
                          "temperature": 0.1})
+    if r.status_code == 429:
+        try:
+            after = float(r.headers.get("retry-after", 20))
+        except ValueError:
+            after = 20.0
+        raise RateLimited(after)
     r.raise_for_status()
     return (r.json()["choices"][0]["message"].get("content") or "").strip()
 
@@ -88,18 +101,28 @@ def complete(prompt, tier="cheap", max_tokens=300, purpose="misc"):
     if os.path.exists(h):
         _bump(purpose, "cache_hits")
         return json.load(open(h))["text"]
-    try:
-        _bump(purpose, "calls")
-        text = _groq(prompt, max_tokens) if prov == "groq" else _anthropic(prompt, tier, max_tokens)
-        if not text:
-            raise ValueError("empty completion (reasoning may have used the whole token budget)")
-        json.dump({"text": text}, open(h, "w"))
-        return text
-    except Exception as e:
-        _bump(purpose, "errors")
-        with _lock:
-            STATS["last_error"] = f"{type(e).__name__}: {str(e)[:200]}"
-        return None
+    _bump(purpose, "calls")
+    err = None
+    for attempt in range(8):
+        try:
+            text = _groq(prompt, max_tokens) if prov == "groq" else _anthropic(prompt, tier, max_tokens)
+            if not text:
+                raise ValueError("empty completion (reasoning may have used the whole token budget)")
+            json.dump({"text": text}, open(h, "w"))
+            return text
+        except RateLimited as e:
+            if PATIENT and attempt < 7 and e.after <= 90:     # a long wait means the DAILY cap: don't sit there
+                time.sleep(e.after + 1)
+                continue
+            err = f"RateLimited: Groq 429, retry-after {e.after:.0f}s"
+            break
+        except Exception as e:
+            err = f"{type(e).__name__}: {str(e)[:200]}"
+            break
+    _bump(purpose, "errors")
+    with _lock:
+        STATS["last_error"] = err
+    return None
 
 
 def complete_json(prompt, tier="cheap", max_tokens=600, purpose="misc"):

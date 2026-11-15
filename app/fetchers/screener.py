@@ -5,6 +5,8 @@ see exactly what was found vs. missing, and the research engine refuses to analy
 For personal research only; respect screener.in's terms of use."""
 import io, re, sys, json, os
 
+# portfolio ticker -> screener.in symbol (Tata Motors demerged in 2025; the listed passenger-vehicles company is TMPV)
+ALIAS = {"TATAMOTORS": "TMPV"}
 CLEAN = re.compile(r"[\s +]+$")
 
 
@@ -55,12 +57,13 @@ def fetch(ticker):
     from bs4 import BeautifulSoup
     s = requests.Session(); s.headers["User-Agent"] = "Mozilla/5.0"
     html = None
+    sym = ALIAS.get(ticker, ticker)
     for path in ("consolidated/", ""):
-        r = s.get(f"https://www.screener.in/company/{ticker}/{path}", timeout=25)
+        r = s.get(f"https://www.screener.in/company/{sym}/{path}", timeout=25)
         if r.status_code == 200 and 'id="profit-loss"' in r.text:
             html = r.text; break
     if html is None:
-        raise RuntimeError(f"screener.in has no page for {ticker} (HTTP {r.status_code})")
+        raise RuntimeError(f"screener.in has no page for {ticker} (tried {sym}, HTTP {r.status_code})")
     soup = BeautifulSoup(html, "html.parser")
     name = (soup.find("h1") or soup.title).get_text(strip=True)
 

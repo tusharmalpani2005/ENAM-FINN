@@ -240,3 +240,23 @@ def test_verdict_does_not_claim_track_record_when_nothing_is_measurable(monkeypa
     monkeypatch.setattr(pull, "narrative_vs_numbers", lambda f: [])
     v = pull.analyse("TITAN")["verdict"]
     assert "not yet measurable" in v and "met or beat" not in v
+
+
+def test_rate_limit_fails_fast_live_but_waits_in_batch_mode(fake_llm, monkeypatch):
+    state, sleeps = dict(n=0), []
+    def post(url, **kw):
+        state["n"] += 1
+        if state["n"] == 1:
+            return httpx.Response(429, headers={"retry-after": "2"}, request=httpx.Request("POST", url))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "answer"}}]}, request=httpx.Request("POST", url))
+    monkeypatch.setattr(httpx, "post", post)
+    monkeypatch.setattr(llm.time, "sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr(llm, "PATIENT", False)
+    assert llm.complete("prompt-live") is None and state["n"] == 1 and sleeps == []          # live request: fall back immediately
+    assert llm.STATS["last_error"].startswith("RateLimited") and llm.STATS["errors"] == 1
+    state["n"] = 0
+    monkeypatch.setattr(llm, "PATIENT", True)
+    assert llm.complete("prompt-batch") == "answer" and state["n"] == 2 and sleeps == [3.0]  # batch job: waits Retry-After, then succeeds
+    monkeypatch.setattr(httpx, "post", lambda url, **kw: httpx.Response(429, headers={"retry-after": "3600"}, request=httpx.Request("POST", url)))
+    sleeps.clear()
+    assert llm.complete("prompt-daily-cap") is None and sleeps == []                          # daily cap: give up, don't sleep for an hour
