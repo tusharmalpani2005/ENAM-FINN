@@ -60,6 +60,7 @@ const store = { ready: t => S.meta && S.meta.research_ready.includes(t) };
 
 /* ---------- TODAY ---------- */
 async function today() {
+  $("main").classList.remove("ask-mode");
   const v = $("#view");
   v.innerHTML = `<div class="row wrap" style="margin:6px 0">${[[24, "24h"], [72, "3 days"], [168, "7 days"], [720, "30 days"]].map(([h, l]) => `<button class="chip ${S.hours == h ? "on" : ""}" data-act="hours" data-h="${h}">${l}</button>`).join("")}</div>${S.note ? `<div class="sub" style="margin:2px 0 6px">${esc(S.note)}</div>` : ""}<div id="tbody" class="sub">Loading…</div>`;
   const [d, al] = await Promise.all([
@@ -120,25 +121,66 @@ async function personSheet(id) {
 /* ---------- ASK ---------- */
 const SUGG = ["What changed today?", "Dig into Asian Paints", "Who should I call about Deepak Nitrite?", "Who is Ananya Rao?", "My go-to people on semiconductors", "Who should I reconnect with?"];
 function askView() {
+  $("main").classList.add("ask-mode");
   $("#view").innerHTML = `<div class="thread" id="thread">${S.thread.length ? S.thread.map(m => m.html).join("") : `<div class="summary" style="margin-top:24px">Ask FINN anything about your book, a company, or who you know.</div><div class="row wrap">${SUGG.map(q => `<button class="chip" data-act="ask" data-q="${esc(q)}">${esc(q)}</button>`).join("")}</div>`}</div>
-  <div class="askbar"><input id="q" placeholder="Ask or speak…" enterkeyhint="send" autocomplete="off"><button id="mic" aria-label="Voice">&#127908;</button><button class="go" id="go" aria-label="Send">&#8593;</button></div>`;
+  <div class="askbar"><input id="q" placeholder="Ask FINN…" enterkeyhint="send" autocomplete="off"><button class="go" id="go" aria-label="Send">&#8593;</button></div>`;
   const send = () => { const i = $("#q"); if (i.value.trim()) doAsk(i.value.trim()); };
   $("#go").onclick = send; $("#q").onkeydown = e => { if (e.key === "Enter") send(); };
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SR) $("#mic").hidden = true; else $("#mic").onclick = () => { const r = new SR(); r.lang = "en-IN"; r.onresult = e => { $("#q").value = e.results[0][0].transcript; send(); }; r.start(); };
   const m = $("#view"); m.scrollTop = m.scrollHeight;
 }
 async function doAsk(q) {
   S.tab !== "ask" && setTab("ask");
   S.thread.push({ html: `<div class="q">${esc(q)}</div>` });
+  const thinkingId = `thinking-${Date.now()}`;
+  S.thread.push({ id: thinkingId, html: `<div class="thinking"><span>FINN is thinking</span><i></i><i></i><i></i></div>` });
   askView();
-  const r = await api("/api/ask", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ q }) });
-  S.thread.push({ html: `<h2>${esc(r.title)}</h2>` + renderCard(r) });
+  try {
+    const r = await api("/api/ask", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ q }) });
+    S.thread = S.thread.filter(m => m.id !== thinkingId);
+    S.thread.push({ html: `<h2>${esc(r.title)}</h2>` + renderCard(r) });
+  } catch (e) {
+    S.thread = S.thread.filter(m => m.id !== thinkingId);
+    S.thread.push({ html: `<h2>FINN</h2><div class="card"><div>${esc(e.message)}</div></div>` });
+  }
   askView();
+}
+function mdInline(text) {
+  let out = esc(text);
+  out = out.replace(/`([^`]+)`/g, "<code>$1</code>");
+  out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  out = out.replace(/__([^_]+)__/g, "<strong>$1</strong>");
+  out = out.replace(/(^|[^*])\*([^*]+)\*(?!\*)/g, "$1<em>$2</em>");
+  out = out.replace(/(^|[^_])_([^_]+)_(?!_)/g, "$1<em>$2</em>");
+  return out;
+}
+function markdown(text) {
+  const lines = String(text ?? "").replace(/\r/g, "").split("\n"), out = [];
+  let paragraph = [], list = null;
+  const close = () => {
+    if (paragraph.length) { out.push(`<p>${paragraph.map(mdInline).join("<br>")}</p>`); paragraph = []; }
+    if (list) { out.push(`</${list}>`); list = null; }
+  };
+  for (const line of lines) {
+    const heading = line.match(/^#{1,3}\s+(.+)$/);
+    const bullet = line.match(/^\s*[-*]\s+(.+)$/);
+    const numbered = line.match(/^\s*\d+[.)]\s+(.+)$/);
+    if (!line.trim()) { close(); continue; }
+    if (heading) { close(); out.push(`<h3>${mdInline(heading[1])}</h3>`); continue; }
+    if (bullet || numbered) {
+      const type = bullet ? "ul" : "ol";
+      if (list !== type) { close(); out.push(`<${type}>`); list = type; }
+      out.push(`<li>${mdInline((bullet || numbered)[1])}</li>`);
+      continue;
+    }
+    if (list) close();
+    paragraph.push(line);
+  }
+  close();
+  return out.join("");
 }
 function renderCard(r) {
   const d = r.data;
-  if (r.card === "text") return `<div class="card"><div>${esc(d.text)}</div></div>`;
+  if (r.card === "text") return `<div class="card answer">${markdown(d.text)}</div>`;
   if (r.card === "people") return d.people.length ? d.people.map(p => contactRow(p, esc(p.why))).join("") : `<div class="sub">Nobody in your network matches. That itself is a finding.</div>`;
   if (r.card === "warm") return d.items.map(w => `<div class="reconnect"><div>${esc(w.nudge)}</div><div class="sub">${esc(w.event)}</div></div>`).join("");
   if (r.card === "digest") return `<div class="summary"><b>${d.counts.must}</b> need you, ${d.counts.look} worth a look.</div>` + d.items.map(filingCard).join("") + `<button class="btn" data-act="tab" data-t="today">Open full digest</button>`;
@@ -149,6 +191,7 @@ function renderCard(r) {
 
 /* ---------- NETWORK ---------- */
 async function networkView() {
+  $("main").classList.remove("ask-mode");
   const m = S.meta; S.netTicker = S.netTicker || "DEEPAKNTR";
   $("#view").innerHTML = `<h2>Who can help me understand…</h2><select id="nsel">${m.portfolio.map(c => `<option value="${c.ticker}" ${c.ticker === S.netTicker ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select><div id="graph"></div>
   <h2>Expertise map</h2><div class="row wrap">${m.themes.map(t => `<button class="chip ${S.theme === t ? "on" : ""}" data-act="theme" data-t="${esc(t)}">${esc(t)}</button>`).join("")}</div><div id="exp"></div>`;

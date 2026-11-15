@@ -68,10 +68,12 @@ def test_alert_thresholds_configurable():
     assert len(loose) > len(strict) and strict == []
 
 
-def test_ask_routes():
-    for q, intent in [("what changed today", "digest"), ("dig into Titan", "research"), ("who is Ananya Rao", "diligence"),
-                      ("who should I call about Asian Paints", "who_to_call"), ("go-to people on rural lending", "expertise")]:
-        assert c.post("/api/ask", json={"q": q}).json()["intent"] == intent
+def test_ask_uses_model(monkeypatch):
+    monkeypatch.setattr(llm, "enabled", lambda: True)
+    monkeypatch.setattr(llm, "complete", lambda *args, **kwargs: "model answer")
+    for q in ("what changed today", "dig into Titan", "who is Ananya Rao"):
+        response = c.post("/api/ask", json={"q": q}).json()
+        assert response["intent"] == "answer" and response["via"] == "llm"
 
 
 def test_unknown_ticker_degrades_gracefully():
@@ -85,6 +87,8 @@ def test_incomplete_live_data_is_refused_not_analysed(tmp_path, monkeypatch):
                ar_notes=dict(contingent=dict(text="", amount=0), rpt="", auditor=""), transcripts=[], quality=["revenue missing"])
     monkeypatch.setattr(store, "fundamentals", lambda t: bad)
     assert c.get("/api/research/ZZZ").status_code == 422
+    monkeypatch.setattr(llm, "enabled", lambda: True)
+    monkeypatch.setattr(llm, "complete", lambda *args, **kwargs: "model answer")
     assert c.post("/api/ask", json={"q": "dig into Titan"}).json()["card"] == "text"
 
 
@@ -116,12 +120,11 @@ from app import llm, router
 
 
 @pytest.fixture
-def fake_llm(monkeypatch, tmp_path):
+def fake_llm(monkeypatch):
     """Pretend Groq is configured and answers according to `responder(prompt) -> str`."""
     box = dict(responder=lambda p: "{}", calls=[])
     monkeypatch.setenv("LLM_PROVIDER", "groq"); monkeypatch.setenv("GROQ_API_KEY", "k")
-    monkeypatch.setattr(llm, "CACHE", str(tmp_path))
-    for k in ("calls", "cache_hits", "errors"): llm.STATS[k] = 0
+    for k in ("calls", "errors"): llm.STATS[k] = 0
     llm.STATS["by_purpose"] = {}; llm.STATS["last_error"] = None
 
     def post(url, **kw):
@@ -133,23 +136,21 @@ def fake_llm(monkeypatch, tmp_path):
     return box
 
 
-def test_ask_falls_back_to_llm_routing_and_validates(fake_llm):
-    q = "is the paint maker worth my time?"          # nothing the keyword router recognises
-    assert router._rules(q)["intent"] == "help"
-    fake_llm["responder"] = lambda p: '```json\n{"intent":"research","ticker":"ASIANPAINT","person":null,"theme":null}\n```'
+def test_ask_always_uses_llm_for_answers(fake_llm):
+    fake_llm["responder"] = lambda p: "Asian Paints has the stronger recent signal."
+    q = "which company is performing worse?"
     r = router.ask(q)
-    assert r["via"] == "llm" and r["intent"] == "research" and r["data"]["ticker"] == "ASIANPAINT"
-    assert llm.STATS["by_purpose"]["ask_routing"]["calls"] == 1
-    # hallucinated person / unknown tool output must not produce a card
-    fake_llm["responder"] = lambda p: '{"intent":"diligence","person":"Elon Musk"}'
-    assert router.ask("tell me about that guy from the other day")["intent"] == "help"
-    fake_llm["responder"] = lambda p: '{"intent":"delete_everything"}'
-    assert router.ask("blah blah zzz")["intent"] == "help"
+    assert r["via"] == "llm" and r["intent"] == "answer"
+    assert r["data"]["text"] == "Asian Paints has the stronger recent signal."
+    assert llm.STATS["by_purpose"]["ask_answer"]["calls"] == 1
 
 
-def test_rules_still_answer_without_calling_the_model(fake_llm):
-    assert router.ask("what changed today")["via"] == "rules"
-    assert "ask_routing" not in llm.STATS["by_purpose"]          # routing never hit the model (digest summaries may)
+def test_ask_does_not_use_canned_responses(fake_llm):
+    fake_llm["responder"] = lambda p: "Model-generated answer."
+    first = router.ask("what changed today")
+    second = router.ask("try something unrelated")
+    assert first["data"]["text"] == second["data"]["text"] == "Model-generated answer."
+    assert llm.STATS["by_purpose"]["ask_answer"]["calls"] == 2
 
 
 def test_llm_guidance_extraction_rejects_invented_numbers(fake_llm):
@@ -175,11 +176,11 @@ def test_llm_summaries_and_graceful_failure(fake_llm):
     d = push.digest(72)
     assert any(i.get("why_via") == "llm" for i in d["items"]) and llm.STATS["by_purpose"]["filing_summary"]["calls"] >= 1
     n = len(fake_llm["calls"]); push.digest(72)
-    assert len(fake_llm["calls"]) == n and llm.STATS["cache_hits"] >= 1            # second load is served from the on-disk cache
+    assert len(fake_llm["calls"]) > n                                         # every response is fetched again
     # provider down: digest and ask still work, errors are counted and visible
     fake_llm["responder"] = lambda p: httpx.ConnectError("down")
     assert c.get("/api/digest?hours=72").status_code == 200
-    assert c.post("/api/ask", json={"q": "is the paint maker worth my time?"}).json()["intent"] == "help"
+    assert c.post("/api/ask", json={"q": "is the paint maker worth my time?"}).status_code == 503
     assert llm.STATS["errors"] >= 1 and "ConnectError" in llm.STATS["last_error"]
     assert c.get("/api/llm").json()["provider"] == "groq"
 

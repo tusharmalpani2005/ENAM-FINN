@@ -77,7 +77,10 @@ class Q(BaseModel):
 
 @app.post("/api/ask")
 def ask(body: Q):
-    return router.ask(body.q)
+    try:
+        return router.ask(body.q)
+    except RuntimeError as e:
+        raise HTTPException(503, str(e)) from e
 
 
 @app.get("/")

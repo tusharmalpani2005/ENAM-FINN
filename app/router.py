@@ -1,138 +1,96 @@
-"""Ask: turns a free-text/voice question into a typed card.
-Tier 1: deterministic keyword/regex routing (instant, free).  Tier 2: if that finds nothing, a cheap LLM
-classifies the question into {intent, ticker, person, theme} and we run the SAME card builders. The LLM never
-produces the answer itself, only the routing, and every field it returns is validated against real data."""
+"""Answer free-text investor questions with the configured LLM."""
+import datetime as dt
+import json
 import re
-from . import store, network, pull, push, seed, llm
 
-INTENTS = ("digest", "research", "who_to_call", "diligence", "expertise", "keep_warm")
+from . import store, seed, network, llm
 
 
-def _find_company(q):
-    ql = q.lower()
+def _context():
+    companies = []
     for c in store.companies():
-        if c["ticker"].lower() in re.findall(r"[a-z]+", ql) or any(a.lower() in ql for a in [c["name"]] + c["aliases"] if len(a) > 2):
-            return c
-    m = re.search(r"\b[A-Z]{3,12}\b", q)
-    if m and store.fundamentals(m.group(0)):
-        return dict(ticker=m.group(0), name=m.group(0))
-    return None
-
-
-def _find_theme(q):
-    ql = q.lower()
-    for t in seed.THEMES + ["chemicals", "lending", "semis", "pharmaceutical", "software", "cables"]:
-        if t in ql:
-            return {"chemicals": "specialty chemicals", "lending": "rural lending", "semis": "semiconductors", "software": "auto software"}.get(t, t)
-    return None
-
-
-# ---------------- card builders (shared by both tiers)
-def _digest():
-    d = push.digest(24)
-    return dict(intent="digest", title="Last 24 hours", card="digest", data=dict(counts=d["counts"], items=d["items"][:4]))
-
-
-def _research(c):
-    try:
-        r = pull.analyse(c["ticker"])
-    except ValueError as e:
-        return dict(intent="no_data", title="Data incomplete", card="text", data=dict(text=str(e)))
-    if r:
-        return dict(intent="research", title=f"{r['name']} research", card="research", data=r)
-    return dict(intent="no_data", title="No fundamentals available", card="text",
-                data=dict(text=f"I couldn't load annual reports / transcripts for {c['ticker']}. Run `python3 -m app.fetchers.screener {c['ticker']}` with network access."))
-
-
-def _who(c):
-    return dict(intent="who_to_call", title=f"Who to call about {c['name']}", card="people",
-                data=dict(people=network.who_to_call(ticker=c["ticker"], limit=5), ticker=c["ticker"]))
-
-
-def _expertise(theme):
-    return dict(intent="expertise", title=f"Your go-to people on {theme}", card="people", data=dict(people=network.expertise(theme)))
-
-
-def _warm():
-    return dict(intent="keep_warm", title="Worth reconnecting with", card="warm", data=dict(items=network.keep_warm(store.announcements())))
-
-
-def _person(name):
-    d = network.diligence(name)
-    return dict(intent="diligence", title=f"Diligence: {d['person']['name']}", card="person", data=d) if d else None
-
-
-def _help():
-    return dict(intent="help", title="Try one of these", card="text",
-                data=dict(text="Ask me about a company (\"dig into Asian Paints\"), a contact (\"who should I call about Deepak Nitrite\"), a person (\"who is Ananya Rao\"), a theme (\"my go-to people on semiconductors\"), or \"what changed today\"."))
-
-
-# ---------------- tier 1: rules
-def _rules(q):
-    ql = q.lower().strip()
-    c, theme = _find_company(q), _find_theme(q)
-    if re.search(r"who is|diligence|background|bio of|before i meet|meeting with", ql):
-        m = re.search(r"(?:who is|diligence on|bio of|meeting with|background of)\s+(.+?)[?.]*$", ql)
-        r = _person((m.group(1) if m else q).strip())
-        if r:
-            return r
-    if re.search(r"who (should|can|do) i|who knows|who.*call|who.*speak|talk to", ql) or (c and "who" in ql):
-        if c:
-            return _who(c)
-        if theme:
-            return _expertise(theme)
-    if re.search(r"expert|go-?to|go to|map|know about", ql) and theme:
-        return _expertise(theme)
-    if re.search(r"warm|reconnect|catch up|haven.t spoken", ql):
-        return _warm()
-    if re.search(r"what changed|digest|today|news|what.?s new|catch me up|filings", ql):
-        return _digest()
-    if c:
-        return _research(c)
-    if theme:
-        return _expertise(theme)
-    return _help()
-
-
-# ---------------- tier 2: LLM classification, fully validated
-def _plan(q):
-    names = "; ".join(f"{c['ticker']}={c['name']}" for c in store.companies())
-    people = "; ".join(p["name"] for p in store.people() + store.ext_people())
-    prompt = (
-        "You route an investor's question to one tool. Tools: digest (what changed / news across the portfolio), "
-        "research (analyse one company's fundamentals), who_to_call (which contact can explain a company), "
-        "diligence (background on a named person), expertise (which contacts know a theme/sector), keep_warm (who to reconnect with).\n"
-        f"Portfolio tickers: {names}\nKnown people: {people}\nThemes: {', '.join(seed.THEMES)}\n"
-        f"Question: {q!r}\n"
-        'Return {"intent": one of the tools or "none", "ticker": ticker from the list or an NSE ticker the user named, else null, '
-        '"person": exact name from Known people or null, "theme": short sector/theme phrase or null}. '
-        'Use "none" if the question is not about any of these tools.')
-    p = llm.complete_json(prompt, tier="cheap", max_tokens=150, purpose="ask_routing")
-    return p if isinstance(p, dict) and p.get("intent") in INTENTS else None
-
-
-def _run_plan(p):
-    t = (p.get("ticker") or "").upper().strip()
-    c = store.company(t) if t and store.company(t) else (dict(ticker=t, name=t) if re.fullmatch(r"[A-Z0-9&-]{2,15}", t) and store.fundamentals(t) else None)
-    theme, intent = (p.get("theme") or "").strip() or None, p["intent"]
-    if intent == "digest": return _digest()
-    if intent == "keep_warm": return _warm()
-    if intent == "diligence" and p.get("person"): return _person(p["person"])
-    if intent == "research" and c: return _research(c)
-    if intent == "who_to_call" and c: return _who(c)
-    if intent in ("expertise", "who_to_call") and theme: return _expertise(theme)
-    return None
+        prices = store.prices().get(c["ticker"], [])
+        fundamentals = store.fundamentals(c["ticker"]) or {}
+        quarters = fundamentals.get("quarters") or {}
+        revenue = quarters.get("revenue") or []
+        pat = quarters.get("pat") or []
+        latest = prices[-1]["c"] if prices else None
+        price_change = ((prices[-1]["c"] / prices[-21]["c"]) - 1) * 100 if len(prices) > 20 else None
+        companies.append({
+            "ticker": c["ticker"],
+            "name": c["name"],
+            "sector": c["sector"],
+            "portfolio_weight": c["weight"],
+            "latest_price": latest,
+            "20_session_price_change_pct": round(price_change, 2) if price_change is not None else None,
+            "latest_quarter": quarters.get("labels", [])[-1:] or [],
+            "revenue": revenue[-2:],
+            "pat": pat[-2:],
+            "data_quality": fundamentals.get("quality", []),
+            "recommended_contacts": [
+                {"name": p["name"], "org": p["org"], "role": p["role"], "why": p["why"]}
+                for p in network.who_to_call(ticker=c["ticker"], limit=3)
+            ],
+        })
+    people = [
+        {
+            "name": p["name"],
+            "org": p["org"],
+            "role": p["role"],
+            "themes": p.get("themes", []),
+            "history": p.get("history", [])[-2:],
+            "relationship_note": p.get("met"),
+        }
+        for p in store.people() + store.ext_people()
+    ]
+    cutoff = store.now() - dt.timedelta(hours=24)
+    announcements = []
+    for item in store.announcements():
+        if dt.datetime.fromisoformat(item["ts"]) >= cutoff:
+            announcements.append({
+                "company": item["ticker"],
+                "subject": item["subject"],
+                "body": (item.get("body") or "")[:500],
+            })
+    return {
+        "portfolio": companies,
+        "people": people,
+        "themes": seed.THEMES,
+        "recent_announcements": announcements[:30],
+    }
 
 
 def ask(q):
-    r = _rules(q)
-    if r["intent"] != "help" or not llm.enabled():
-        r["via"] = "rules"
-        return r
-    plan = _plan(q)
-    out = _run_plan(plan) if plan else None
-    if out:
-        out["via"], out["title"] = "llm", out["title"] + "  (AI-routed)"
-        return out
-    r["via"] = "rules"
-    return r
+    if not llm.enabled():
+        raise RuntimeError("Ask mode requires a configured LLM provider.")
+    prompt = (
+        "You are FINN, an investment-network copilot. Answer the investor directly using the supplied portfolio, "
+        "market, fundamentals, filing, and contact data. Lead with the conclusion and cite the most relevant company, "
+        "person, metric, or comparison. Keep the answer under 90 words. Use Markdown with a blank line between "
+        "paragraphs. For contact questions, use one short bullet per person rather than a single paragraph. "
+        "Do not repeat the question or provide a long preamble. "
+        "Speak in first person as FINN. Never refer to 'the snapshot', 'the supplied context', 'the data I have', "
+        "or 'the user'. If direct contact details are absent, say: 'I don't have their phone number or email.' "
+        "For contact questions, use the company's recommended_contacts in the supplied order; the first is FINN's "
+        "top recommendation. Do not replace a direct current employee with a less-relevant former employee. "
+        "If asked how to contact someone, use relationship_note to suggest a warm introduction when available. "
+        "FINN cannot place calls or send messages, and should not suggest generic corporate channels when a network path exists. "
+        "Do not invent facts or hide behind a generic disclaimer when the context supports an answer. "
+        "Treat the supplied snapshot as the app's available data; do not claim you lack real-time access when a relevant "
+        "price, fundamentals, filing, or contact value is present below. "
+        "If the context truly lacks the requested fact, say what is missing. Plain text, no JSON, no canned help.\n\n"
+        f"FINN context:\n{json.dumps(_context(), ensure_ascii=False)}\n\n"
+        f"Investor question: {q}"
+    )
+    answer = llm.complete(prompt, tier="cheap", max_tokens=400, purpose="ask_answer")
+    if not answer:
+        raise RuntimeError("The configured LLM did not return an answer.")
+    if re.search(r"\b(?:who|whom|call|contact|speak)\b", q, re.I):
+        answer = re.sub(r"\s+(?=(?:First|Second|Third|Backup|Alternative)\s*:)", "\n\n", answer)
+    return {
+        "intent": "answer",
+        "title": "FINN",
+        "card": "text",
+        "data": {"text": answer},
+        "via": "llm",
+    }

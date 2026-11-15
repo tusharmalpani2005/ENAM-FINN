@@ -1,6 +1,5 @@
-"""Pre-compute model answers so the deployed app serves them from the on-disk cache (data/cache/) instead of
-calling a rate-limited API on every visit.   Usage:  python3 -m app.warm [TICKER ...]
-Default tickers = the companies you demo. Waits out Groq's rate limit; re-run it safely (cached answers are skipped)."""
+"""Pre-compute model answers for a deployment. Usage: python3 -m app.warm [TICKER ...]
+Default tickers = the companies you demo. Responses are not persisted."""
 import sys
 import time
 from . import llm, push, pull
@@ -8,7 +7,7 @@ from . import llm, push, pull
 
 def main():
     if not llm.enabled():
-        print("No LLM configured (set LLM_PROVIDER / GROQ_API_KEY in .env). Nothing to warm.")
+        print("No LLM configured (set LLM_PROVIDER and its provider API key in .env). Nothing to warm.")
         return
     llm.PATIENT = True
     tickers = [t.upper() for t in sys.argv[1:]] or ["ASIANPAINT", "DEEPAKNTR", "KPITTECH", "TITAN"]
