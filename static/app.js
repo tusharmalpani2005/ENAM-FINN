@@ -4,7 +4,7 @@ const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "
 const api = (u, o) => fetch(u, o).then(async r => { if (!r.ok) { let m = r.status; try { m = (await r.json()).detail || m } catch { } throw new Error(m); } return r.json(); });
 const ls = { get: (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d } catch { return d } }, set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)) } catch { } } };
 
-const S = { note: "", manual: false, tab: "today", meta: null, hours: ls.get("hours", 24), volx: ls.get("volx", 2), px: ls.get("px", 4), cats: ls.get("cats", []), thread: [], netTicker: null, theme: null };
+const S = { note: "", manual: false, tab: "today", meta: null, hours: ls.get("hours", 24), volx: ls.get("volx", 2), px: ls.get("px", 4), cats: ls.get("cats", []), thread: [], netTicker: null, theme: null, mode: ls.get("mode", "dark") };
 const ini = n => n.split(/\s+/).map(w => w[0]).slice(0, 2).join("");
 const pct = (v, d = 1) => v == null ? "–" : `<span class="${v >= 0 ? "up" : "dn"}">${v >= 0 ? "+" : ""}${v.toFixed(d)}%</span>`;
 const ago = iso => { const h = (Date.now() - new Date(iso)) / 36e5; return h < 1 ? "now" : h < 24 ? Math.round(h) + "h" : Math.round(h / 24) + "d"; };
@@ -239,7 +239,13 @@ document.addEventListener("click", e => {
   else if (a === "theme") { S.theme = t.dataset.t; networkView(); }
   else if (a === "cat") { const c = t.dataset.c; S.cats = S.cats.includes(c) ? S.cats.filter(x => x !== c) : [...S.cats, c]; t.classList.toggle("on"); }
 });
+function applyMode() {
+  document.documentElement.dataset.theme = S.mode;
+  $("#mode").setAttribute("aria-label", S.mode === "dark" ? "Switch to light mode" : "Switch to dark mode");
+}
+$("#mode").onclick = () => { S.mode = S.mode === "dark" ? "light" : "dark"; ls.set("mode", S.mode); applyMode(); };
 $("#gear").onclick = settings;
+applyMode();
 (async () => {
   S.meta = await api("/api/meta"); $("#demo").textContent = "Synthetic: " + S.meta.synthetic_layers.join(", ") + (S.meta.live_fundamentals.length ? "" : ", research"); $("#demo").hidden = false;
   render();
